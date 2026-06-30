@@ -505,10 +505,16 @@ function carregarDoSheets(cb){
 
 function sincronizarPainel(){
   if(!SCRIPT_URL){alert('Configure a URL primeiro.');return;}
-  carregarDoSheets(()=>{
+  const btn=document.querySelector('[onclick="sincronizarPainel()"]');
+  if(btn){btn.textContent='⏳ Sincronizando...';btn.disabled=true;}
+  carregarDoSheets(function(){
     atualizarTudo();
     if(temDadosPainel())enviarParaSheets();
-    alert('✅ Sincronizado!');
+    if(btn){btn.textContent='☁️ Sincronizar';btn.disabled=false;}
+    // Mostrar status atualizado
+    const el=document.getElementById('status-conexao');
+    if(el)el.textContent='✅ Sincronizado '+new Date().toLocaleTimeString('pt-BR');
+    setTimeout(function(){atualizarStatusConexao();},3000);
   });
 }
 
@@ -1072,11 +1078,36 @@ function salvarConfigEmpresa(){
 // ===== INIT =====
 carregarDB();
 carregarScriptUrl();
+
+// Ao abrir: busca do Sheets PRIMEIRO, depois tenta login automático
+// Isso garante que os dados mais recentes (do celular) apareçam no PC
 setTimeout(function(){
-  carregarDoSheets(function(){
+  if(navigator.onLine && SCRIPT_URL){
+    carregarDoSheets(function(){
+      tentarAutoLoginPainel();
+    });
+  } else {
     tentarAutoLoginPainel();
-  });
+  }
 },800);
+
+// Recarregar do Sheets também quando o painel já está aberto e volta conexão
+window.addEventListener('online', function(){
+  if(USUARIO_PAINEL && SCRIPT_URL){
+    carregarDoSheets(function(){
+      atualizarTudo();
+    });
+  }
+});
+
+// Recarregar a cada 60 segundos quando online (garante dados frescos)
+setInterval(function(){
+  if(USUARIO_PAINEL && SCRIPT_URL && navigator.onLine){
+    carregarDoSheets(function(){
+      atualizarTudo();
+    });
+  }
+}, 60000);
 
 </script>
 </body>
