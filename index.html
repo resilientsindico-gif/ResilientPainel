@@ -524,8 +524,37 @@ window.addEventListener('offline',atualizarStatusConexao);
 function fazerLoginPainel(){
   const user=document.getElementById('login-user').value.trim();
   const senha=document.getElementById('login-senha').value;
-  const u=DB.usuariosPainel.find(x=>x.usuario===user&&x.senha===senha);
-  if(!u){document.getElementById('login-err').style.display='block';return;}
+
+  // Tenta login nos usuarios carregados do Sheets
+  let u=DB.usuariosPainel.find(x=>x.usuario===user&&x.senha===senha);
+
+  // Se não achou, tenta buscar do Sheets e fazer login de novo
+  if(!u){
+    // Login padrão inicial (permite entrar pela primeira vez e cadastrar os usuarios)
+    if(user==='admin'&&senha==='resilient2026'){
+      u={id:'admin-default',nome:'Administrador',usuario:'admin',senha:'resilient2026'};
+    }
+  }
+
+  if(!u){
+    // Tenta recarregar do Sheets antes de desistir
+    carregarDoSheets(function(){
+      const u2=DB.usuariosPainel.find(x=>x.usuario===user&&x.senha===senha);
+      if(u2){
+        USUARIO_PAINEL=u2;
+        localStorage.setItem('resilient_painel_userid',u2.id);
+        document.getElementById('login-screen').classList.add('hidden');
+        document.getElementById('sidebar').classList.remove('hidden');
+        document.getElementById('main').classList.remove('hidden');
+        document.getElementById('usuario-logado-nome').textContent=u2.nome;
+        iniciarPainel();
+      } else {
+        document.getElementById('login-err').style.display='block';
+      }
+    });
+    return;
+  }
+
   USUARIO_PAINEL=u;
   localStorage.setItem('resilient_painel_userid',u.id);
   document.getElementById('login-screen').classList.add('hidden');
