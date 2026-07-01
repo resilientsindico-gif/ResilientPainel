@@ -279,6 +279,39 @@ function formatarData(d){if(!d)return'';const dt=new Date(d);return dt.toLocaleD
 let SCRIPT_URL='';
 function carregarScriptUrl(){SCRIPT_URL=localStorage.getItem('resilient_campo_script_url')||'https://script.google.com/macros/s/AKfycbzf3BUM223J1MRC3xMKi8FiQq6q1sry6aXoX-k8cFvFdXsygey5SYCUPm7so3ZmlO5w/exec';}
 
+// ===== FILA DE PENDENTES (igual MJL) =====
+function adicionarPendente(item){
+  const fila=JSON.parse(localStorage.getItem('resilient_fila')||'[]');
+  fila.push({...item,ts:new Date().toISOString()});
+  localStorage.setItem('resilient_fila',JSON.stringify(fila));
+  processarFila();
+}
+
+function processarFila(){
+  const url=SCRIPT_URL;
+  if(!url||!navigator.onLine)return;
+  const fila=JSON.parse(localStorage.getItem('resilient_fila')||'[]');
+  if(!fila.length)return;
+  // Envia todos os itens da fila de uma vez via syncAll
+  // Mais eficiente que enviar um por um
+  const payload={acao:'syncAll',dados:DB};
+  fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+    .then(()=>{
+      localStorage.removeItem('resilient_fila');
+      atualizarStatusConexao();
+    })
+    .catch(()=>{});
+}
+
+// Processar fila quando voltar internet
+window.addEventListener('online',function(){
+  atualizarStatusConexao();
+  processarFila();
+});
+
+// Processar fila a cada 30s
+setInterval(processarFila,30000);
+
 // ===== STATUS DE CONEXÃO =====
 function atualizarStatusConexao(){
   const el=document.getElementById('status-conexao');
@@ -296,47 +329,9 @@ window.addEventListener('offline',atualizarStatusConexao);
 // ===== FILA OFFLINE =====
 // Cada vez que salva algo, tenta enviar. Se falhar ou estiver offline, guarda na fila.
 function enviarParaSheets(){
-  atualizarStatusConexao();
-  if(!SCRIPT_URL)return;
-  // Envia se tiver demandas ou visitas registradas (não bloquear por condomínios/usuários)
-  if(!DB.demandas.length&&!DB.visitas.length&&!DB.usuarios.length)return;
-
-  if(!navigator.onLine){
-    adicionarFilaOffline();
-    return;
-  }
-  const payload={acao:'syncAll',dados:DB};
-  fetch(SCRIPT_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
-    .then(()=>{
-      // Sucesso (no-cors não confirma, mas assumimos OK) — limpa fila
-      localStorage.removeItem('resilient_campo_fila');
-      atualizarStatusConexao();
-    })
-    .catch(()=>{adicionarFilaOffline();});
+  // Usar a fila de pendentes para envio confiável
+  processarFila();
 }
-
-function adicionarFilaOffline(){
-  // Marca que há uma sincronização pendente (guardamos só 1 marcador, pois DB já tem tudo salvo local)
-  localStorage.setItem('resilient_campo_fila',JSON.stringify([{pendente:true,data:new Date().toISOString()}]));
-  atualizarStatusConexao();
-}
-
-function processarFilaOffline(){
-  const fila=JSON.parse(localStorage.getItem('resilient_campo_fila')||'[]');
-  if(fila.length===0)return;
-  if(!SCRIPT_URL||!navigator.onLine)return;
-  const payload={acao:'syncAll',dados:DB};
-  fetch(SCRIPT_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
-    .then(()=>{
-      localStorage.removeItem('resilient_campo_fila');
-      atualizarStatusConexao();
-      console.log('✅ Fila offline sincronizada com sucesso');
-    })
-    .catch(()=>{console.log('⚠️ Ainda sem conexão, tentando depois...');});
-}
-
-// Tenta processar a fila periodicamente (a cada 30s) e quando o app reabre
-setInterval(processarFilaOffline,30000);
 
 function carregarDoSheets(cb){
   if(!SCRIPT_URL||!navigator.onLine){atualizarStatusConexao();if(cb)cb();return;}
@@ -537,12 +532,14 @@ function capturarFotoChegada(input){
 function confirmarChegada(){
   const obs=document.getElementById('chegada-obs').value.trim();
   function salvar(lat,lng){
-    DB.visitas.push({id:gid(),usuarioId:USUARIO_LOGADO.id,usuarioNome:USUARIO_LOGADO.nome,condoId:CONDO_ATUAL.id,condoNome:CONDO_ATUAL.nome,data:new Date().toISOString(),foto:_fotoChegada,obs,lat,lng});
+    const visita={id:gid(),usuarioId:USUARIO_LOGADO.id,usuarioNome:USUARIO_LOGADO.nome,condoId:CONDO_ATUAL.id,condoNome:CONDO_ATUAL.nome,data:new Date().toISOString(),foto:_fotoChegada,obs,lat,lng};
+    DB.visitas.push(visita);
+    adicionarPendente({acao:'novaVisita',dados:visita});
     salvarDB();
     fm('modal-chegada');
     atualizarStatusChegada();
     renderHome();
-    const msgOffline=!navigator.onLine?' (será sincronizado quando voltar a internet)':'';
+    const msgOffline=!navigator.onLine?' (offline — enviará quando voltar a internet)':'';
     alert('✅ Chegada registrada com sucesso!'+msgOffline);
   }
   // GPS funciona mesmo sem internet (usa o chip de localização do celular)
@@ -585,28 +582,37 @@ function salvarDemanda(){
   if(!desc){alert('Descreva a demanda.');return;}
   const catNova=document.getElementById('md-cat-nova').value.trim();
   const categoria=catNova||_catSelecionada||'Outro';
+  const btn=document.querySelector('[onclick="salvarDemanda()"]');
+  if(btn){btn.disabled=true;btn.textContent='Salvando...';}
+
   function criar(lat,lng){
     const obj={id:gid(),condoId:CONDO_ATUAL.id,condoNome:CONDO_ATUAL.nome,categoria,descricao:desc,
       foto:_fotoDemanda,prioridade:document.getElementById('md-prioridade').value,
       status:'aberta',origem:'preposto',criadoPor:USUARIO_LOGADO.nome,criadoPorId:USUARIO_LOGADO.id,criadoEm:new Date().toISOString(),
       lat,lng,fotoAntes:null,fotoDepois:null,execObs:'',concluidoEm:null,concluidoPor:''};
     DB.demandas.push(obj);
+    // Adicionar à fila de pendentes para envio
+    adicionarPendente({acao:'novaDemanda',dados:obj});
     salvarDB();
-    // Forçar envio imediato para o Sheets
-    enviarParaSheets();
     fm('modal-demanda');
     renderDemandasCondo();
     renderHome();
-    const msgOffline=!navigator.onLine?' (será sincronizado quando voltar a internet)':'';
+    if(btn){btn.disabled=false;btn.textContent='Abrir Demanda';}
+    const msgOffline=!navigator.onLine?' (offline — enviará quando voltar a internet)':'';
     alert('✅ Demanda registrada!'+msgOffline);
   }
+
+  // Timeout duplo: se GPS demorar mais de 5s, cria sem GPS
+  let criado=false;
+  const timerGPS=setTimeout(()=>{if(!criado){criado=true;criar(null,null);}},5000);
+
   if(navigator.geolocation){
     navigator.geolocation.getCurrentPosition(
-      pos=>criar(pos.coords.latitude,pos.coords.longitude),
-      ()=>criar(null,null),
-      {timeout:4000}
+      pos=>{if(!criado){criado=true;clearTimeout(timerGPS);criar(pos.coords.latitude,pos.coords.longitude);}},
+      ()=>{if(!criado){criado=true;clearTimeout(timerGPS);criar(null,null);}},
+      {timeout:4500,maximumAge:30000}
     );
-  } else criar(null,null);
+  } else {clearTimeout(timerGPS);criar(null,null);}
 }
 
 function verDemanda(id){
