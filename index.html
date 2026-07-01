@@ -203,10 +203,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
       <input id="md-cat-nova" placeholder="Ou digite uma nova categoria..." style="margin-top:6px;">
     </div>
     <div class="fg"><label>Descrição da demanda *</label><textarea id="md-desc" rows="3" placeholder="Descreva o que precisa ser feito..."></textarea></div>
-    <div class="fg"><label>Foto (opcional)</label>
-      <input type="file" id="md-foto-input" accept="image/*" capture="environment" style="display:none;" onchange="capturarFotoDemanda(this)">
-      <button class="btn btn-ghost" onclick="document.getElementById('md-foto-input').click()">📷 Adicionar Foto</button>
-      <img id="md-foto-preview" class="foto-preview hidden">
+    <div class="fg">
+      <label>Fotos e Vídeos (opcional)</label>
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <input type="file" id="md-midia-input" accept="image/*,video/*" capture="environment" multiple style="display:none;" onchange="adicionarMidiasDemanda(this)">
+        <button class="btn btn-ghost" style="flex:1;" onclick="document.getElementById('md-midia-input').click()">📷 Fotos</button>
+        <button class="btn btn-ghost" style="flex:1;" onclick="document.getElementById('md-midia-input').click()">🎥 Vídeo</button>
+      </div>
+      <div id="md-midias-preview" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
     </div>
     <div class="fg"><label>Prioridade</label>
       <select id="md-prioridade"><option value="normal">Normal</option><option value="urgente">Urgente</option></select>
@@ -262,7 +266,7 @@ let DB={usuarios:[],condominios:[],demandas:[],visitas:[],vinculos:[]};
 let USUARIO_LOGADO=null;
 let CONDO_ATUAL=null;
 let _fotoChegada=null;
-let _fotoDemanda=null;
+let _midiasDemanda=[];  // Array de fotos e vídeos da demanda
 let _fotoExecAntes=null;
 let _fotoExecDepois=null;
 let _catSelecionada='';
@@ -282,9 +286,14 @@ function carregarScriptUrl(){SCRIPT_URL=localStorage.getItem('resilient_campo_sc
 // ===== FILA DE PENDENTES (igual MJL) =====
 function adicionarPendente(item){
   const fila=JSON.parse(localStorage.getItem('resilient_fila')||'[]');
-  fila.push({...item,ts:new Date().toISOString()});
+  // Evitar duplicatas: substituir item com mesmo id se já existir
+  const idx=fila.findIndex(x=>x.dados&&item.dados&&x.dados.id===item.dados.id&&x.acao===item.acao);
+  if(idx>=0)fila[idx]={...item,ts:new Date().toISOString()};
+  else fila.push({...item,ts:new Date().toISOString()});
   localStorage.setItem('resilient_fila',JSON.stringify(fila));
-  processarFila();
+  // Delay para não enviar múltiplas vezes em sequência
+  clearTimeout(window._filaTimer);
+  window._filaTimer=setTimeout(processarFila,1500);
 }
 
 function processarFila(){
@@ -292,8 +301,6 @@ function processarFila(){
   if(!url||!navigator.onLine)return;
   const fila=JSON.parse(localStorage.getItem('resilient_fila')||'[]');
   if(!fila.length)return;
-  // Envia todos os itens da fila de uma vez via syncAll
-  // Mais eficiente que enviar um por um
   const payload={acao:'syncAll',dados:DB};
   fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
     .then(()=>{
@@ -306,11 +313,11 @@ function processarFila(){
 // Processar fila quando voltar internet
 window.addEventListener('online',function(){
   atualizarStatusConexao();
-  processarFila();
+  setTimeout(processarFila,2000);
 });
 
-// Processar fila a cada 30s
-setInterval(processarFila,30000);
+// Processar fila a cada 60s
+setInterval(processarFila,60000);
 
 // ===== STATUS DE CONEXÃO =====
 function atualizarStatusConexao(){
@@ -329,8 +336,9 @@ window.addEventListener('offline',atualizarStatusConexao);
 // ===== FILA OFFLINE =====
 // Cada vez que salva algo, tenta enviar. Se falhar ou estiver offline, guarda na fila.
 function enviarParaSheets(){
-  // Usar a fila de pendentes para envio confiável
-  processarFila();
+  // Só processa se tiver itens na fila
+  const fila=JSON.parse(localStorage.getItem('resilient_fila')||'[]');
+  if(fila.length>0)processarFila();
 }
 
 function carregarDoSheets(cb){
@@ -557,9 +565,9 @@ function abrirModalDemanda(){
   document.getElementById('md-condo-id').value=CONDO_ATUAL.id;
   document.getElementById('md-desc').value='';
   document.getElementById('md-cat-nova').value='';
-  document.getElementById('md-foto-preview').classList.add('hidden');
+  document.getElementById('md-midias-preview').innerHTML='';
   document.getElementById('md-prioridade').value='normal';
-  _fotoDemanda=null;_catSelecionada='';
+  _midiasDemanda=[];_catSelecionada='';
   renderCategoriasChips();
   abrirModal('modal-demanda');
 }
@@ -570,11 +578,47 @@ function renderCategoriasChips(){
 }
 function selecionarCategoria(c){_catSelecionada=c;document.getElementById('md-cat-nova').value='';renderCategoriasChips();}
 
-function capturarFotoDemanda(input){
-  const file=input.files[0];if(!file)return;
-  const reader=new FileReader();
-  reader.onload=e=>{_fotoDemanda=e.target.result;document.getElementById('md-foto-preview').src=e.target.result;document.getElementById('md-foto-preview').classList.remove('hidden');};
-  reader.readAsDataURL(file);
+function adicionarMidiasDemanda(input){
+  const files=Array.from(input.files);if(!files.length)return;
+  const preview=document.getElementById('md-midias-preview');
+  files.forEach(file=>{
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const isVideo=file.type.startsWith('video/');
+      const data=e.target.result;
+      _midiasDemanda.push({tipo:isVideo?'video':'foto',data,nome:file.name});
+      const idx=_midiasDemanda.length-1;
+      const div=document.createElement('div');
+      div.style.cssText='position:relative;width:80px;height:80px;flex-shrink:0;';
+      if(isVideo){
+        div.innerHTML=`<video src="${data}" style="width:80px;height:80px;object-fit:cover;border-radius:8px;"></video><div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:20px;">▶️</div>`;
+      } else {
+        div.innerHTML=`<img src="${data}" style="width:80px;height:80px;object-fit:cover;border-radius:8px;">`;
+      }
+      div.innerHTML+=`<button onclick="removerMidia(${idx})" style="position:absolute;top:2px;right:2px;background:rgba(0,0,0,.6);color:#fff;border:none;border-radius:50%;width:20px;height:20px;font-size:11px;cursor:pointer;">×</button>`;
+      preview.appendChild(div);
+    };
+    reader.readAsDataURL(file);
+  });
+  input.value=''; // Permite selecionar os mesmos arquivos novamente
+}
+
+function removerMidia(idx){
+  _midiasDemanda.splice(idx,1);
+  // Re-renderizar previews
+  const preview=document.getElementById('md-midias-preview');
+  preview.innerHTML='';
+  _midiasDemanda.forEach((m,i)=>{
+    const div=document.createElement('div');
+    div.style.cssText='position:relative;width:80px;height:80px;flex-shrink:0;';
+    if(m.tipo==='video'){
+      div.innerHTML=`<video src="${m.data}" style="width:80px;height:80px;object-fit:cover;border-radius:8px;"></video><div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:20px;">▶️</div>`;
+    } else {
+      div.innerHTML=`<img src="${m.data}" style="width:80px;height:80px;object-fit:cover;border-radius:8px;">`;
+    }
+    div.innerHTML+=`<button onclick="removerMidia(${i})" style="position:absolute;top:2px;right:2px;background:rgba(0,0,0,.6);color:#fff;border:none;border-radius:50%;width:20px;height:20px;font-size:11px;cursor:pointer;">×</button>`;
+    preview.appendChild(div);
+  });
 }
 
 function salvarDemanda(){
@@ -587,7 +631,9 @@ function salvarDemanda(){
 
   function criar(lat,lng){
     const obj={id:gid(),condoId:CONDO_ATUAL.id,condoNome:CONDO_ATUAL.nome,categoria,descricao:desc,
-      foto:_fotoDemanda,prioridade:document.getElementById('md-prioridade').value,
+      midias:[..._midiasDemanda],  // Array de fotos e vídeos
+      foto:_midiasDemanda.length>0?_midiasDemanda[0].data:null,  // Compatibilidade
+      prioridade:document.getElementById('md-prioridade').value,
       status:'aberta',origem:'preposto',criadoPor:USUARIO_LOGADO.nome,criadoPorId:USUARIO_LOGADO.id,criadoEm:new Date().toISOString(),
       lat,lng,fotoAntes:null,fotoDepois:null,execObs:'',concluidoEm:null,concluidoPor:''};
     DB.demandas.push(obj);
@@ -620,7 +666,15 @@ function verDemanda(id){
   const statusBadge=d.status==='concluida'?'<span class="badge b-green">Concluída</span>':d.status==='andamento'?'<span class="badge b-yellow">Em Andamento</span>':'<span class="badge b-orange">Aberta</span>';
   let html=`<div style="margin-bottom:12px;">${statusBadge} <span class="badge b-blue">${d.categoria}</span> ${d.prioridade==='urgente'?'<span class="badge b-red">Urgente</span>':''}</div>
     <p style="margin-bottom:10px;">${d.descricao}</p>`;
-  if(d.foto)html+=`<img src="${d.foto}" class="foto-preview">`;
+  // Mostrar múltiplas mídias se houver
+  if(d.midias&&d.midias.length>0){
+    html+=`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">`;
+    d.midias.forEach(m=>{
+      if(m.tipo==='video')html+=`<video src="${m.data}" controls style="max-width:100%;border-radius:8px;max-height:200px;"></video>`;
+      else html+=`<img src="${m.data}" style="max-width:100%;border-radius:8px;max-height:200px;object-fit:cover;">`;
+    });
+    html+=`</div>`;
+  } else if(d.foto)html+=`<img src="${d.foto}" class="foto-preview">`;
   html+=`<div class="info-box blue">Aberta por ${d.criadoPor} em ${formatarData(d.criadoEm)}${d.lat?' • 📍 Localização registrada':''}</div>`;
   if(d.status==='concluida'){
     html+=`<div class="foto-row">
