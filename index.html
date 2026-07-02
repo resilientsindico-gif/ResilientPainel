@@ -171,8 +171,12 @@ tr:hover td{background:#fafbff;}
         <div class="stat"><div class="lbl">Atrasadas</div><div class="val" id="st-atrasadas" style="color:var(--red)">0</div></div>
       </div>
       <div class="card">
-        <div class="card-title">⚠️ Tarefas e Demandas Atrasadas</div>
-        <div id="dash-atrasadas"></div>
+        <div class="card-title">⚠️ Pendências do Síndico (Minhas Tarefas)</div>
+        <div id="dash-atrasadas-sindico"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">⚠️ Pendências dos Prepostos/Zeladores (Demandas)</div>
+        <div id="dash-atrasadas-preposto"></div>
       </div>
       <div class="card">
         <div class="card-title">📋 Demandas Recentes dos Prepostos</div>
@@ -223,7 +227,10 @@ tr:hover td{background:#fafbff;}
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin:18px 0 14px;">
         <strong style="font-size:15px;color:var(--brand)">Demandas deste Condomínio</strong>
-        <button class="btn btn-orange" onclick="abrirModalDemandaCondo()">+ Nova Demanda</button>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost btn-sm" onclick="verRelatorioDesteCondo()">📄 Relatório</button>
+          <button class="btn btn-orange" onclick="abrirModalDemandaCondo()">+ Nova Demanda</button>
+        </div>
       </div>
       <div class="filtros">
         <button class="btn btn-ghost btn-sm" onclick="filtrarDemandasCondo('abertas')" id="fdc-abertas">Abertas</button>
@@ -240,11 +247,19 @@ tr:hover td{background:#fafbff;}
 
     <!-- TODAS DEMANDAS -->
     <div class="page" id="page-demandas">
-      <strong style="font-size:16px;color:var(--brand)">Todas as Demandas</strong>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <strong style="font-size:16px;color:var(--brand)">Todas as Demandas</strong>
+        <button class="btn btn-ghost btn-sm" onclick="window.print()">🖨️ Imprimir lista</button>
+      </div>
       <div class="filtros" style="margin-top:14px;">
         <select id="dg-condo" onchange="renderDemandasGeralPainel()"><option value="">Todos condomínios</option></select>
         <select id="dg-status" onchange="renderDemandasGeralPainel()"><option value="">Todos status</option><option value="aberta">Aberta</option><option value="andamento">Andamento</option><option value="concluida">Concluída</option></select>
         <select id="dg-origem" onchange="renderDemandasGeralPainel()"><option value="">Todas origens</option><option value="preposto">Preposto</option><option value="sindico">Síndico</option></select>
+      </div>
+      <div class="filtros" style="margin-top:8px;align-items:center;gap:8px;">
+        <label style="font-size:12px;color:var(--text2);">De: <input type="date" id="dg-data-de" onchange="renderDemandasGeralPainel()"></label>
+        <label style="font-size:12px;color:var(--text2);">Até: <input type="date" id="dg-data-ate" onchange="renderDemandasGeralPainel()"></label>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('dg-data-de').value='';document.getElementById('dg-data-ate').value='';renderDemandasGeralPainel()">Limpar datas</button>
       </div>
       <div id="lista-demandas-geral-painel"></div>
     </div>
@@ -269,8 +284,12 @@ tr:hover td{background:#fafbff;}
         <div class="fr">
           <div class="fg"><label>Condomínio</label><select id="rel-condo"></select></div>
           <div class="fg"><label>Período</label>
-            <select id="rel-periodo"><option value="30">Últimos 30 dias</option><option value="90">Últimos 90 dias</option><option value="all">Todo histórico</option></select>
+            <select id="rel-periodo" onchange="document.getElementById('rel-datas-custom').style.display=this.value==='custom'?'flex':'none'"><option value="7">Últimos 7 dias (semanal)</option><option value="30">Últimos 30 dias (mensal)</option><option value="90">Últimos 90 dias</option><option value="all">Todo histórico</option><option value="custom">Período personalizado</option></select>
           </div>
+        </div>
+        <div class="fr" id="rel-datas-custom" style="display:none;">
+          <div class="fg"><label>De</label><input type="date" id="rel-data-de"></div>
+          <div class="fg"><label>Até</label><input type="date" id="rel-data-ate"></div>
         </div>
         <button class="btn btn-primary" onclick="gerarRelatorio()">📄 Gerar Relatório</button>
       </div>
@@ -635,16 +654,23 @@ function renderDashboard(){
   const atrasadasDemandas=DB.demandas.filter(d=>d.status!=='concluida'&&d.dataAgendada&&new Date(d.dataAgendada+'T12:00')<hoje);
   document.getElementById('st-atrasadas').textContent=atrasadasTarefas.length+atrasadasDemandas.length;
 
-  const todasAtrasadas=[...atrasadasTarefas.map(t=>({...t,origem:'tarefa'})),...atrasadasDemandas.map(d=>({...d,origem:'demanda',desc:d.descricao}))];
-  const elA=document.getElementById('dash-atrasadas');
-  elA.innerHTML=todasAtrasadas.length?todasAtrasadas.map(item=>{
+  // Pendências do Síndico = suas próprias tarefas (visitas, agendamentos, propostas, reuniões, burocracias)
+  const pendSindico=DB.tarefas.filter(t=>t.status!=='concluida');
+  const elSind=document.getElementById('dash-atrasadas-sindico');
+  elSind.innerHTML=pendSindico.length?pendSindico.map(item=>{
     const condo=DB.condominios.find(c=>c.id===item.condoId);
-    return `<div class="tarefa-card atrasada">
-      <div class="topo"><strong>${item.categoria}</strong><span class="badge b-red">Atrasada</span></div>
-      <div class="desc">${item.desc||item.descricao}</div>
-      <div class="meta">🏢 ${condo?.nome||''} • 📅 ${formatarDataCurta(item.data||item.dataAgendada)}</div>
+    const atrasada=item.data&&new Date(item.data+'T12:00')<hoje;
+    return `<div class="tarefa-card ${atrasada?'atrasada':''}" onclick="verItem('${item.id}','tarefa')" style="cursor:pointer;">
+      <div class="topo"><strong>${item.categoria}</strong><span class="badge ${atrasada?'b-red':'b-blue'}">${atrasada?'Atrasada':'Pendente'}</span></div>
+      <div class="desc">${item.descricao}</div>
+      <div class="meta">🏢 ${condo?.nome||'Geral'} ${item.data?'• 📅 '+formatarDataCurta(item.data):'• Sem data'}</div>
     </div>`;
-  }).join(''):'<div class="empty-state" style="padding:20px;"><div class="ic">✅</div>Nenhuma pendência atrasada!</div>';
+  }).join(''):'<div class="empty-state" style="padding:20px;"><div class="ic">✅</div>Nenhuma tarefa pendente!</div>';
+
+  // Pendências dos Prepostos/Zeladores = demandas em aberto (atribuídas a um preposto ou não)
+  const pendPreposto=DB.demandas.filter(d=>d.status!=='concluida');
+  const elPrep=document.getElementById('dash-atrasadas-preposto');
+  elPrep.innerHTML=pendPreposto.length?pendPreposto.map(item=>renderDemandaCardPainel(item)).join(''):'<div class="empty-state" style="padding:20px;"><div class="ic">✅</div>Nenhuma demanda em aberto!</div>';
 
   const recentes=[...DB.demandas].sort((a,b)=>new Date(b.criadoEm)-new Date(a.criadoEm)).slice(0,8);
   const elR=document.getElementById('dash-demandas-recentes');
@@ -782,10 +808,11 @@ function renderDemandaCardPainel(d){
     const hoje=new Date();hoje.setHours(0,0,0,0);
     if(new Date(d.dataAgendada+'T12:00')<hoje)atrasoCls='atrasada';
   }
+  const responsavelCard=d.atribuidoPara?DB.usuarios.find(u=>u.id===d.atribuidoPara):null;
   return `<div class="tarefa-card ${atrasoCls}" onclick="verItem('${d.id}','demanda')" style="cursor:pointer;">
     <div class="topo"><strong>${d.categoria}</strong>${statusBadge}</div>
     <div class="desc">${d.descricao}</div>
-    <div class="meta">🏢 ${condo?.nome||''} • 👤 ${d.criadoPor} • 📅 ${formatarData(d.criadoEm)} ${d.prioridade==='urgente'?'• 🔴 Urgente':''}</div>
+    <div class="meta">🏢 ${condo?.nome||''} • 👤 ${d.criadoPor} • 📅 ${formatarData(d.criadoEm)} ${d.prioridade==='urgente'?'• 🔴 Urgente':''}${responsavelCard?` • Resp: ${responsavelCard.nome}`:''}</div>
   </div>`;
 }
 
@@ -891,7 +918,8 @@ function verItem(id,tipo){
   let html=`<div style="margin-bottom:12px;"><span class="badge b-blue">${item.categoria}</span> ${item.prioridade==='urgente'?'<span class="badge b-red">Urgente</span>':''} <span class="badge ${st.cls==='atrasada'?'b-red':item.status==='concluida'?'b-green':'b-yellow'}">${st.label}</span></div>
     <p style="margin-bottom:10px;">${item.descricao}</p>`;
   if(item.foto)html+=`<img src="${item.foto}" class="foto-preview">`;
-  html+=`<div class="info-box blue">🏢 ${condo?.nome||'—'} • Por ${item.criadoPor} em ${formatarData(item.criadoEm)}${dataRef?' • Agendado: '+formatarDataCurta(dataRef):''}</div>`;
+  const responsavelVerItem=item.atribuidoPara?DB.usuarios.find(u=>u.id===item.atribuidoPara):null;
+  html+=`<div class="info-box blue">🏢 ${condo?.nome||'—'} • Aberta por ${item.criadoPor}${item.origem==='sindico'?' (Síndico)':item.origem==='preposto'?' (Preposto)':''} em ${formatarData(item.criadoEm)}${dataRef?' • Agendado: '+formatarDataCurta(dataRef):''}${responsavelVerItem?` • Responsável: <strong>${responsavelVerItem.nome}</strong>`:tipo==='demanda'?' • Sem responsável atribuído':''}</div>`;
   if(item.status==='concluida'){
     html+=`<div class="foto-row">
       ${item.fotoAntes?`<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:4px;">ANTES</div><img src="${item.fotoAntes}" class="foto-preview"></div>`:''}
@@ -951,10 +979,14 @@ function renderDemandasGeralPainel(){
   const condoF=selCondo.value;
   const statusF=document.getElementById('dg-status').value;
   const origemF=document.getElementById('dg-origem').value;
+  const dataDeF=document.getElementById('dg-data-de')?.value;
+  const dataAteF=document.getElementById('dg-data-ate')?.value;
   let demandas=[...DB.demandas];
   if(condoF)demandas=demandas.filter(d=>d.condoId===condoF);
   if(statusF)demandas=demandas.filter(d=>d.status===statusF);
   if(origemF)demandas=demandas.filter(d=>d.origem===origemF);
+  if(dataDeF)demandas=demandas.filter(d=>new Date(d.criadoEm)>=new Date(dataDeF+'T00:00'));
+  if(dataAteF)demandas=demandas.filter(d=>new Date(d.criadoEm)<=new Date(dataAteF+'T23:59'));
   demandas.sort((a,b)=>new Date(b.criadoEm)-new Date(a.criadoEm));
   const el=document.getElementById('lista-demandas-geral-painel');
   el.innerHTML=demandas.length?demandas.map(d=>renderDemandaCardPainel(d)).join(''):'<div class="empty-state"><div class="ic">📋</div>Nenhuma demanda encontrada.</div>';
@@ -1010,16 +1042,28 @@ function excluirPreposto(id){if(!confirm('Excluir?'))return;DB.usuarios=DB.usuar
 function renderRelatorios(){
   document.getElementById('rel-condo').innerHTML=DB.condominios.map(c=>`<option value="${c.id}">${c.nome}</option>`).join('');
 }
+function verRelatorioDesteCondo(){
+  navegar('relatorios');
+  document.getElementById('rel-condo').value=CONDO_ATUAL_ID;
+  document.getElementById('rel-periodo').value='30';
+  gerarRelatorio();
+}
 function gerarRelatorio(){
   const condoId=document.getElementById('rel-condo').value;
   const periodo=document.getElementById('rel-periodo').value;
   const condo=DB.condominios.find(c=>c.id===condoId);
   if(!condo)return;
-  let dataLimite=null;
-  if(periodo!=='all'){dataLimite=new Date();dataLimite.setDate(dataLimite.getDate()-Number(periodo));}
   let demandas=DB.demandas.filter(d=>d.condoId===condoId);
   let visitas=DB.visitas.filter(v=>v.condoId===condoId);
-  if(dataLimite){demandas=demandas.filter(d=>new Date(d.criadoEm)>=dataLimite);visitas=visitas.filter(v=>new Date(v.data)>=dataLimite);}
+  if(periodo==='custom'){
+    const de=document.getElementById('rel-data-de').value;
+    const ate=document.getElementById('rel-data-ate').value;
+    if(de){demandas=demandas.filter(d=>new Date(d.criadoEm)>=new Date(de+'T00:00'));visitas=visitas.filter(v=>new Date(v.data)>=new Date(de+'T00:00'));}
+    if(ate){demandas=demandas.filter(d=>new Date(d.criadoEm)<=new Date(ate+'T23:59'));visitas=visitas.filter(v=>new Date(v.data)<=new Date(ate+'T23:59'));}
+  } else if(periodo!=='all'){
+    const dataLimite=new Date();dataLimite.setDate(dataLimite.getDate()-Number(periodo));
+    demandas=demandas.filter(d=>new Date(d.criadoEm)>=dataLimite);visitas=visitas.filter(v=>new Date(v.data)>=dataLimite);
+  }
   const concluidas=demandas.filter(d=>d.status==='concluida').length;
   const abertas=demandas.filter(d=>d.status!=='concluida').length;
   document.getElementById('relatorio-output').innerHTML=`
