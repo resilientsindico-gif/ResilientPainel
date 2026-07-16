@@ -142,6 +142,7 @@ tr:hover td{background:#fafbff;}
     <a class="nav-link" data-page="condominios">🏢 Condomínios</a>
     <a class="nav-link" data-page="demandas">📋 Todas Demandas</a>
     <a class="nav-link" data-page="prepostos">👷 Prepostos/Zeladores</a>
+    <a class="nav-link" data-page="preventivas">🔧 Preventivas</a>
     <div class="menu-sec">Relatórios</div>
     <a class="nav-link" data-page="relatorios">📄 Relatórios</a>
     <div class="menu-sec">Sistema</div>
@@ -169,6 +170,10 @@ tr:hover td{background:#fafbff;}
         <div class="stat"><div class="lbl">Demandas Abertas</div><div class="val" id="st-demandas-abertas" style="color:var(--orange)">0</div></div>
         <div class="stat"><div class="lbl">Minhas Tarefas Pendentes</div><div class="val" id="st-tarefas-pend" style="color:var(--blue)">0</div></div>
         <div class="stat"><div class="lbl">Atrasadas</div><div class="val" id="st-atrasadas" style="color:var(--red)">0</div></div>
+      </div>
+      <div class="card" id="card-prev-vencidas" style="display:none;">
+        <div class="card-title">🔧 Preventivas Vencidas</div>
+        <div id="dash-prev-vencidas"></div>
       </div>
       <div class="card">
         <div class="card-title">⚠️ Pendências do Síndico (Minhas Tarefas)</div>
@@ -277,6 +282,19 @@ tr:hover td{background:#fafbff;}
     </div>
 
     <!-- RELATORIOS -->
+    <div class="page" id="page-preventivas">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <strong style="font-size:16px;color:var(--brand)">🔧 Manutenção Preventiva</strong>
+        <button class="btn btn-primary" onclick="abrirModalEquipamento()">+ Equipamento</button>
+      </div>
+      <p style="font-size:12px;color:var(--text3);margin-top:4px;">Cadastre equipamentos/sistemas de cada condomínio (bombas, portões, geradores, caixa d'água, extintores...) com a frequência de manutenção. O calendário mostra o que está vencido e o que vem pela frente, e daqui você gera a OS direto pro preposto.</p>
+      <div class="filtros" style="margin-top:14px;">
+        <select id="prev-condo" onchange="renderPreventivas()"><option value="">Todos condomínios</option></select>
+        <select id="prev-status" onchange="renderPreventivas()"><option value="">Todas situações</option><option value="atrasada">🔴 Atrasadas</option><option value="proxima">🟡 Próximos 7 dias</option><option value="emdia">🟢 Em dia</option></select>
+      </div>
+      <div id="lista-preventivas" style="margin-top:10px;"></div>
+    </div>
+
     <div class="page" id="page-relatorios">
       <strong style="font-size:16px;color:var(--brand)">Relatórios</strong>
       <div class="card" style="margin-top:14px;">
@@ -368,6 +386,30 @@ tr:hover td{background:#fafbff;}
 </div></div>
 
 <!-- MODAL NOVA DEMANDA (do síndico para um condomínio) -->
+<div id="modal-equipamento" class="modal-overlay hidden"><div class="modal">
+  <div class="modal-hdr"><h3 id="meq-tit">Novo Equipamento</h3><button class="modal-cls" onclick="fm('modal-equipamento')">×</button></div>
+  <div class="modal-body">
+    <input type="hidden" id="meq-id"><input type="hidden" id="meq-condo-orig">
+    <div class="fg"><label>Condomínio *</label><select id="meq-condo"></select></div>
+    <div class="fg"><label>Equipamento / Sistema *</label><input id="meq-nome" placeholder="Ex: Bomba d'água, Portão social, Gerador..."></div>
+    <div class="fr">
+      <div class="fg"><label>Local</label><input id="meq-local" placeholder="Ex: Subsolo, Térreo..."></div>
+      <div class="fg"><label>Frequência *</label>
+        <select id="meq-freq"><option value="7">Semanal</option><option value="15">Quinzenal</option><option value="30" selected>Mensal</option><option value="60">Bimestral</option><option value="90">Trimestral</option><option value="180">Semestral</option><option value="365">Anual</option></select>
+      </div>
+    </div>
+    <div class="fr">
+      <div class="fg"><label>Última manutenção</label><input type="date" id="meq-ultima"></div>
+      <div class="fg"><label>Responsável padrão</label><select id="meq-resp"><option value="">Não definido</option></select></div>
+    </div>
+    <div class="fg"><label>Checklist (um item por linha)</label><textarea id="meq-checklist" rows="5" placeholder="Ex:&#10;Verificar ruídos anormais&#10;Testar acionamento&#10;Conferir vazamentos&#10;Limpar filtros"></textarea></div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-primary" onclick="salvarEquipamento()" style="flex:1;">Salvar</button>
+      <button class="btn btn-danger hidden" id="meq-excluir" onclick="excluirEquipamento()">Excluir</button>
+    </div>
+  </div>
+</div></div>
+
 <div id="modal-demanda-sindico" class="modal-overlay hidden"><div class="modal">
   <div class="modal-hdr"><h3 id="mds-tit">Nova Demanda</h3><button class="modal-cls" onclick="fm('modal-demanda-sindico')">×</button></div>
   <div class="modal-body">
@@ -620,14 +662,14 @@ function iniciarPainel(){
 }
 
 // ===== NAVEGAÇÃO =====
-const TITULOS={dashboard:'Dashboard',agenda:'Minha Agenda',condominios:'Condomínios','condo-detalhe':'Condomínio',demandas:'Todas as Demandas',prepostos:'Prepostos / Zeladores',relatorios:'Relatórios',usuarios:'Usuários do Painel',config:'Configurações'};
+const TITULOS={dashboard:'Dashboard',agenda:'Minha Agenda',condominios:'Condomínios','condo-detalhe':'Condomínio',demandas:'Todas as Demandas',prepostos:'Prepostos / Zeladores',preventivas:'Manutenção Preventiva',relatorios:'Relatórios',usuarios:'Usuários do Painel',config:'Configurações'};
 function navegar(p){
   document.querySelectorAll('.page').forEach(s=>s.classList.remove('active'));
   document.getElementById('page-'+p).classList.add('active');
   document.querySelectorAll('.nav-link').forEach(a=>a.classList.remove('active'));
   document.querySelector(`[data-page="${p}"]`)?.classList.add('active');
   document.getElementById('page-title').textContent=TITULOS[p]||'';
-  const R={dashboard:renderDashboard,agenda:renderAgenda,condominios:renderCondominios,demandas:renderDemandasGeralPainel,prepostos:renderPrepostos,relatorios:renderRelatorios,usuarios:renderUsuariosPainel,config:carregarConfigEmpresa};
+  const R={dashboard:renderDashboard,agenda:renderAgenda,condominios:renderCondominios,demandas:renderDemandasGeralPainel,prepostos:renderPrepostos,preventivas:renderPreventivas,relatorios:renderRelatorios,usuarios:renderUsuariosPainel,config:carregarConfigEmpresa};
   if(R[p])R[p]();
 }
 function atualizarTudo(){const p=document.querySelector('.page.active')?.id?.replace('page-','');if(p)navegar(p);}
@@ -653,6 +695,22 @@ function renderDashboard(){
   const atrasadasTarefas=DB.tarefas.filter(t=>t.status!=='concluida'&&t.data&&new Date(t.data+'T12:00')<hoje);
   const atrasadasDemandas=DB.demandas.filter(d=>d.status!=='concluida'&&d.dataAgendada&&new Date(d.dataAgendada+'T12:00')<hoje);
   document.getElementById('st-atrasadas').textContent=atrasadasTarefas.length+atrasadasDemandas.length;
+
+  // Preventivas vencidas (equipamentos com manutenção atrasada e sem OS aberta)
+  const prevVencidas=todosEquipamentos().filter(e=>statusPreventiva(e).cls==='atrasada');
+  const cardPrev=document.getElementById('card-prev-vencidas');
+  if(prevVencidas.length){
+    cardPrev.style.display='';
+    document.getElementById('dash-prev-vencidas').innerHTML=prevVencidas.map(e=>{
+      const st=statusPreventiva(e);
+      const osAberta=DB.demandas.find(d=>d.equipamentoId===e.id&&d.status!=='concluida');
+      return `<div class="tarefa-card atrasada">
+        <div class="topo"><strong>🔧 ${e.nome}</strong><span class="badge b-red">${st.label}</span></div>
+        <div class="meta">🏢 ${e.condoNome}${osAberta?' • 📋 OS já aberta':''}</div>
+        ${osAberta?'':`<button class="btn btn-orange btn-sm" style="margin-top:6px;" onclick="gerarOSPreventiva('${e.condoId}','${e.id}')">📋 Gerar OS</button>`}
+      </div>`;
+    }).join('');
+  } else cardPrev.style.display='none';
 
   // Pendências do Síndico = suas próprias tarefas (visitas, agendamentos, propostas, reuniões, burocracias)
   const pendSindico=DB.tarefas.filter(t=>t.status!=='concluida');
@@ -917,6 +975,17 @@ function verItem(id,tipo){
   const st=statusItem(dataRef,item.status);
   let html=`<div style="margin-bottom:12px;"><span class="badge b-blue">${item.categoria}</span> ${item.prioridade==='urgente'?'<span class="badge b-red">Urgente</span>':''} <span class="badge ${st.cls==='atrasada'?'b-red':item.status==='concluida'?'b-green':'b-yellow'}">${st.label}</span></div>
     <p style="margin-bottom:10px;">${item.descricao}</p>`;
+  if(item.checklist&&item.checklist.length){
+    const resp=item.checklistResultado||[];
+    html+=`<div style="background:var(--bg2,#f5f7f6);border-radius:10px;padding:10px 12px;margin-bottom:10px;">
+      <strong style="font-size:12px;color:var(--text2);">✓ CHECKLIST DA PREVENTIVA</strong>
+      ${item.checklist.map((it,i)=>{
+        const r=resp.find(x=>x.item===it)||resp[i];
+        const icone=!r||!r.resposta?'⬜':r.resposta==='sim'?'✅':r.resposta==='nao'?'❌':'➖';
+        return `<div style="font-size:13px;margin-top:6px;">${icone} ${it}${r&&r.obs?` <span style="color:var(--text3);">— ${r.obs}</span>`:''}</div>`;
+      }).join('')}
+    </div>`;
+  }
   if(item.foto)html+=`<img src="${item.foto}" class="foto-preview">`;
   const responsavelVerItem=item.atribuidoPara?DB.usuarios.find(u=>u.id===item.atribuidoPara):null;
   html+=`<div class="info-box blue">🏢 ${condo?.nome||'—'} • Aberta por ${item.criadoPor}${item.origem==='sindico'?' (Síndico)':item.origem==='preposto'?' (Preposto)':''} em ${formatarData(item.criadoEm)}${dataRef?' • Agendado: '+formatarDataCurta(dataRef):''}${responsavelVerItem?` • Responsável: <strong>${responsavelVerItem.nome}</strong>`:tipo==='demanda'?' • Sem responsável atribuído':''}</div>`;
@@ -962,6 +1031,7 @@ function concluirItemPainel(){
   const lista=tipo==='tarefa'?DB.tarefas:DB.demandas;
   const item=lista.find(x=>x.id===id);if(!item)return;
   item.status='concluida';
+  if(item.equipamentoId)registrarConclusaoPreventiva(item);
   item.fotoAntes=_fotoExpAntes;
   item.fotoDepois=_fotoExpDepois;
   item.execObs=document.getElementById('exp-obs').value.trim();
@@ -1039,6 +1109,131 @@ function renderPrepostos(){
 function excluirPreposto(id){if(!confirm('Excluir?'))return;DB.usuarios=DB.usuarios.filter(x=>x.id!==id);DB.vinculos=DB.vinculos.filter(v=>v.usuarioId!==id);salvarDB();renderPrepostos();}
 
 // ===== RELATORIOS =====
+// ===== PREVENTIVAS (EQUIPAMENTOS) =====
+// Equipamentos ficam dentro de cada condomínio (condo.equipamentos), sincronizando pela aba Condominios já existente.
+function ultimaEfetiva(eq){
+  // considera a data cadastrada E as OS concluídas vinculadas (concluídas pelo Campo ou Painel)
+  let ultima=eq.ultima||'';
+  DB.demandas.filter(d=>d.equipamentoId===eq.id&&d.status==='concluida'&&d.concluidoEm).forEach(d=>{
+    const dt=d.concluidoEm.slice(0,10);if(dt>ultima)ultima=dt;
+  });
+  return ultima;
+}
+function proximaManutencao(eq){
+  const ultima=ultimaEfetiva(eq);
+  if(!ultima)return null; // nunca feita → considera pendente imediata
+  const d=new Date(ultima+'T12:00');d.setDate(d.getDate()+Number(eq.freq||30));return d;
+}
+function statusPreventiva(eq){
+  const hoje=new Date();hoje.setHours(0,0,0,0);
+  const prox=proximaManutencao(eq);
+  if(!prox)return{cls:'atrasada',label:'Nunca realizada',badge:'b-red',dias:null};
+  const diff=Math.round((prox-hoje)/86400000);
+  if(diff<0)return{cls:'atrasada',label:`Atrasada ${-diff}d`,badge:'b-red',dias:diff};
+  if(diff===0)return{cls:'proxima',label:'Vence hoje',badge:'b-yellow',dias:0};
+  if(diff<=7)return{cls:'proxima',label:`Vence em ${diff}d`,badge:'b-yellow',dias:diff};
+  return{cls:'emdia',label:`Em dia (${diff}d)`,badge:'b-green',dias:diff};
+}
+function todosEquipamentos(){
+  const lista=[];
+  DB.condominios.forEach(c=>(c.equipamentos||[]).forEach(eq=>lista.push({...eq,condoId:c.id,condoNome:c.nome})));
+  return lista;
+}
+function renderPreventivas(){
+  const sel=document.getElementById('prev-condo');
+  const valAtual=sel.value;
+  sel.innerHTML='<option value="">Todos condomínios</option>'+DB.condominios.map(c=>`<option value="${c.id}">${c.nome}</option>`).join('');
+  sel.value=valAtual;
+  const fCondo=sel.value,fStatus=document.getElementById('prev-status').value;
+  let eqs=todosEquipamentos();
+  if(fCondo)eqs=eqs.filter(e=>e.condoId===fCondo);
+  eqs=eqs.map(e=>({...e,_st:statusPreventiva(e),_prox:proximaManutencao(e)}));
+  if(fStatus)eqs=eqs.filter(e=>e._st.cls===fStatus);
+  eqs.sort((a,b)=>(a._prox?a._prox.getTime():0)-(b._prox?b._prox.getTime():0));
+  const el=document.getElementById('lista-preventivas');
+  if(!eqs.length){el.innerHTML='<div class="empty-state"><div class="ic">🔧</div>Nenhum equipamento cadastrado ainda. Clique em "+ Equipamento" para começar o plano de preventivas.</div>';return;}
+  const FREQ_LABEL={7:'Semanal',15:'Quinzenal',30:'Mensal',60:'Bimestral',90:'Trimestral',180:'Semestral',365:'Anual'};
+  el.innerHTML=eqs.map(e=>{
+    const resp=e.atribuidoPara?DB.usuarios.find(u=>u.id===e.atribuidoPara):null;
+    const osAberta=DB.demandas.find(d=>d.equipamentoId===e.id&&d.status!=='concluida');
+    return `<div class="tarefa-card ${e._st.cls==='atrasada'?'atrasada':''}">
+      <div class="topo"><strong>🔧 ${e.nome}</strong><span class="badge ${e._st.badge}">${e._st.label}</span></div>
+      <div class="desc">${e.local?e.local+' • ':''}${FREQ_LABEL[e.freq]||e.freq+' dias'}${e.checklist&&e.checklist.length?` • ✓ ${e.checklist.length} itens de checklist`:''}</div>
+      <div class="meta">🏢 ${e.condoNome} ${ultimaEfetiva(e)?'• Última: '+formatarDataCurta(ultimaEfetiva(e)):'• Nunca realizada'} ${e._prox?'• Próxima: '+e._prox.toLocaleDateString('pt-BR'):''} ${resp?'• 👤 '+resp.nome:''}</div>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        ${osAberta?`<button class="btn btn-ghost btn-sm" onclick="verItem('${osAberta.id}','demanda')">📋 Ver OS aberta</button>`:`<button class="btn btn-orange btn-sm" onclick="gerarOSPreventiva('${e.condoId}','${e.id}')">📋 Gerar OS</button>`}
+        <button class="btn btn-ghost btn-sm" onclick="abrirModalEquipamento('${e.condoId}','${e.id}')">✏️ Editar</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+function abrirModalEquipamento(condoId,eqId){
+  document.getElementById('meq-condo').innerHTML=DB.condominios.map(c=>`<option value="${c.id}">${c.nome}</option>`).join('');
+  const selResp=document.getElementById('meq-resp');
+  selResp.innerHTML='<option value="">Não definido</option>'+DB.usuarios.filter(u=>u.tipo==='preposto').map(u=>`<option value="${u.id}">${u.nome}</option>`).join('');
+  if(condoId&&eqId){
+    const c=DB.condominios.find(x=>x.id===condoId);const eq=(c.equipamentos||[]).find(x=>x.id===eqId);if(!eq)return;
+    document.getElementById('meq-tit').textContent='Editar Equipamento';
+    document.getElementById('meq-id').value=eq.id;document.getElementById('meq-condo-orig').value=condoId;
+    document.getElementById('meq-condo').value=condoId;
+    document.getElementById('meq-nome').value=eq.nome||'';document.getElementById('meq-local').value=eq.local||'';
+    document.getElementById('meq-freq').value=eq.freq||30;document.getElementById('meq-ultima').value=eq.ultima||'';
+    selResp.value=eq.atribuidoPara||'';
+    document.getElementById('meq-checklist').value=(eq.checklist||[]).join('\n');
+    document.getElementById('meq-excluir').classList.remove('hidden');
+  }else{
+    document.getElementById('meq-tit').textContent='Novo Equipamento';
+    ['meq-id','meq-condo-orig','meq-nome','meq-local','meq-ultima','meq-checklist'].forEach(x=>document.getElementById(x).value='');
+    document.getElementById('meq-freq').value=30;selResp.value='';
+    if(condoId)document.getElementById('meq-condo').value=condoId;
+    document.getElementById('meq-excluir').classList.add('hidden');
+  }
+  abrirModal('modal-equipamento');
+}
+function salvarEquipamento(){
+  const nome=document.getElementById('meq-nome').value.trim();if(!nome){alert('Informe o nome do equipamento.');return;}
+  const condoId=document.getElementById('meq-condo').value;
+  const condo=DB.condominios.find(c=>c.id===condoId);if(!condo){alert('Selecione o condomínio.');return;}
+  const id=document.getElementById('meq-id').value;
+  const condoOrig=document.getElementById('meq-condo-orig').value;
+  const obj={id:id||gid(),nome,local:document.getElementById('meq-local').value.trim(),
+    freq:Number(document.getElementById('meq-freq').value),
+    ultima:document.getElementById('meq-ultima').value||'',
+    atribuidoPara:document.getElementById('meq-resp').value||'',
+    checklist:document.getElementById('meq-checklist').value.split('\n').map(s=>s.trim()).filter(Boolean)};
+  if(id&&condoOrig&&condoOrig!==condoId){const cO=DB.condominios.find(c=>c.id===condoOrig);if(cO)cO.equipamentos=(cO.equipamentos||[]).filter(e=>e.id!==id);}
+  condo.equipamentos=condo.equipamentos||[];
+  const i=condo.equipamentos.findIndex(e=>e.id===obj.id);
+  if(i>=0)condo.equipamentos[i]={...condo.equipamentos[i],...obj};else condo.equipamentos.push(obj);
+  salvarDB();fm('modal-equipamento');renderPreventivas();
+}
+function excluirEquipamento(){
+  if(!confirm('Excluir este equipamento do plano de preventivas?'))return;
+  const id=document.getElementById('meq-id').value;const condoId=document.getElementById('meq-condo-orig').value||document.getElementById('meq-condo').value;
+  const c=DB.condominios.find(x=>x.id===condoId);if(c)c.equipamentos=(c.equipamentos||[]).filter(e=>e.id!==id);
+  salvarDB();fm('modal-equipamento');renderPreventivas();
+}
+function gerarOSPreventiva(condoId,eqId){
+  const c=DB.condominios.find(x=>x.id===condoId);const eq=(c?.equipamentos||[]).find(x=>x.id===eqId);if(!eq)return;
+  const obj={id:gid(),condoId:c.id,condoNome:c.nome,categoria:'Manutenção Preventiva',
+    descricao:`Preventiva: ${eq.nome}${eq.local?' ('+eq.local+')':''}`,
+    equipamentoId:eq.id,checklist:(eq.checklist||[]).slice(),tipoManutencao:'preventiva',
+    foto:null,fotos:[],video:null,prioridade:'normal',status:'aberta',origem:'sindico',
+    criadoPor:USUARIO_PAINEL.nome,criadoEm:new Date().toISOString(),
+    atribuidoPara:eq.atribuidoPara||'',
+    fotoAntes:null,fotoDepois:null,execObs:'',concluidoEm:null,concluidoPor:''};
+  DB.demandas.push(obj);
+  salvarDB();renderPreventivas();
+  alert('✅ OS de preventiva gerada!'+(obj.atribuidoPara?' Já atribuída ao responsável — vai aparecer no app Campo dele.':' Sem responsável definido — atribua pelo detalhe da demanda.'));
+}
+// Ao concluir uma demanda de preventiva, atualiza a data da última manutenção do equipamento
+function registrarConclusaoPreventiva(d){
+  if(!d.equipamentoId)return;
+  const c=DB.condominios.find(x=>x.id===d.condoId);if(!c)return;
+  const eq=(c.equipamentos||[]).find(e=>e.id===d.equipamentoId);if(!eq)return;
+  eq.ultima=(d.concluidoEm||new Date().toISOString()).slice(0,10);
+}
+
 function renderRelatorios(){
   document.getElementById('rel-condo').innerHTML=DB.condominios.map(c=>`<option value="${c.id}">${c.nome}</option>`).join('');
 }
@@ -1066,6 +1261,9 @@ function gerarRelatorio(){
   }
   const concluidas=demandas.filter(d=>d.status==='concluida').length;
   const abertas=demandas.filter(d=>d.status!=='concluida').length;
+  const preventivas=demandas.filter(d=>d.tipoManutencao==='preventiva');
+  const corretivas=demandas.filter(d=>d.tipoManutencao!=='preventiva');
+  _relatorioDemandas=demandas;_relatorioCondoNome=condo.nome;
   document.getElementById('relatorio-output').innerHTML=`
     <div class="card">
       <h3 style="color:var(--brand);margin-bottom:4px;">Relatório — ${condo.nome}</h3>
@@ -1074,11 +1272,32 @@ function gerarRelatorio(){
         <div class="stat"><div class="lbl">Visitas registradas</div><div class="val" style="color:var(--blue)">${visitas.length}</div></div>
         <div class="stat"><div class="lbl">Demandas concluídas</div><div class="val" style="color:var(--green)">${concluidas}</div></div>
         <div class="stat"><div class="lbl">Demandas em aberto</div><div class="val" style="color:var(--orange)">${abertas}</div></div>
+        <div class="stat"><div class="lbl">Preventivas</div><div class="val" style="color:var(--brand)">${preventivas.length}</div></div>
       </div>
-      <h4 style="margin:14px 0 8px;color:var(--text2);">Demandas no período</h4>
-      ${demandas.length?demandas.map(d=>renderDemandaCardPainel(d)).join(''):'<p style="color:var(--text3);font-size:12px;">Nenhuma demanda no período.</p>'}
-      <button class="btn btn-primary" style="margin-top:14px;" onclick="window.print()">🖨️ Imprimir</button>
+      ${preventivas.length?`<h4 style="margin:14px 0 8px;color:var(--text2);">🔧 Manutenções Preventivas no período</h4>
+      ${preventivas.map(d=>renderDemandaCardPainel(d)).join('')}`:''}
+      <h4 style="margin:14px 0 8px;color:var(--text2);">🛠️ Corretivas e demais demandas no período</h4>
+      ${corretivas.length?corretivas.map(d=>renderDemandaCardPainel(d)).join(''):'<p style="color:var(--text3);font-size:12px;">Nenhuma demanda no período.</p>'}
+      <div style="display:flex;gap:8px;margin-top:14px;">
+        <button class="btn btn-primary" onclick="window.print()">🖨️ Imprimir / PDF</button>
+        <button class="btn btn-ghost" onclick="exportarRelatorioCSV()">📊 Exportar Excel (CSV)</button>
+      </div>
     </div>`;
+}
+let _relatorioDemandas=[],_relatorioCondoNome='';
+function exportarRelatorioCSV(){
+  if(!_relatorioDemandas.length){alert('Gere um relatório primeiro.');return;}
+  const esc=v=>'"'+String(v??'').replace(/"/g,'""').replace(/\r?\n/g,' ')+'"';
+  const linhas=[['Tipo','Categoria','Descricao','Status','Prioridade','Aberta por','Aberta em','Responsavel','Concluida por','Concluida em','Execucao'].join(';')];
+  _relatorioDemandas.forEach(d=>{
+    const resp=d.atribuidoPara?(DB.usuarios.find(u=>u.id===d.atribuidoPara)?.nome||''):'';
+    linhas.push([d.tipoManutencao==='preventiva'?'Preventiva':'Corretiva/Demanda',d.categoria,d.descricao,d.status,d.prioridade||'',d.criadoPor||'',d.criadoEm?new Date(d.criadoEm).toLocaleString('pt-BR'):'',resp,d.concluidoPor||'',d.concluidoEm?new Date(d.concluidoEm).toLocaleString('pt-BR'):'',d.execObs||''].map(esc).join(';'));
+  });
+  const blob=new Blob(['\ufeff'+linhas.join('\r\n')],{type:'text/csv;charset=utf-8;'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`relatorio_${_relatorioCondoNome.replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();URL.revokeObjectURL(a.href);
 }
 
 // ===== USUARIOS DO PAINEL =====
