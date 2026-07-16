@@ -515,11 +515,31 @@ function fm(id){document.getElementById(id).classList.add('hidden');}
 function abrirModal(id){document.getElementById(id).classList.remove('hidden');}
 function formatarData(d){if(!d)return'';const dt=new Date(d);return dt.toLocaleDateString('pt-BR')+' '+dt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});}
 function formatarDataCurta(d){if(!d)return'';return new Date(d+'T12:00').toLocaleDateString('pt-BR');}
+// Reduz fotos para caber com folga no Sheets e deixar o envio leve
+function comprimirImagem(dataUrl,cb,maxLado,qualidade){
+  maxLado=maxLado||1280;qualidade=qualidade||0.72;
+  const img=new Image();
+  img.onload=function(){
+    let w=img.width,h=img.height;
+    if(w>maxLado||h>maxLado){const esc=maxLado/Math.max(w,h);w=Math.round(w*esc);h=Math.round(h*esc);}
+    const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+    cv.getContext('2d').drawImage(img,0,0,w,h);
+    cb(cv.toDataURL('image/jpeg',qualidade));
+  };
+  img.onerror=function(){cb(dataUrl);};
+  img.src=dataUrl;
+}
 
-// ===== PERSISTENCIA + SYNC =====
-function salvarDB(){
+// ===== PERSISTENCIA + SYNC (v3 incremental) =====
+// salvarDB(aba,item): salva local + envia SÓ o item alterado, com confirmação real do servidor.
+// salvarDBLista(aba,listaCompleta): usado para exclusões (substitui a aba no servidor).
+function salvarDB(aba,item){
   localStorage.setItem('resilient_painel_db',JSON.stringify(DB));
-  enviarParaSheets();
+  if(aba&&item)filaAdicionar({tipo:'upsert',aba,item:JSON.parse(JSON.stringify(item))});
+}
+function salvarDBLista(aba,lista){
+  localStorage.setItem('resilient_painel_db',JSON.stringify(DB));
+  filaAdicionar({tipo:'replace',aba,itens:JSON.parse(JSON.stringify(lista))});
 }
 function carregarDB(){const r=localStorage.getItem('resilient_painel_db');if(r)DB=JSON.parse(r);}
 
@@ -536,13 +556,53 @@ function temDadosPainel(){
          DB.visitas.length>0||DB.vinculos.length>0||DB.tarefas.length>0||DB.usuariosPainel.length>0;
 }
 
-function enviarParaSheets(){
+// ===== FILA DE ENVIO (só sai da fila com confirmação {ok:true} do servidor) =====
+let _enviandoFila=false;
+function filaLer(){try{return JSON.parse(localStorage.getItem('resilient_painel_fila_v3')||'[]');}catch(e){return[];}}
+function filaGravar(f){localStorage.setItem('resilient_painel_fila_v3',JSON.stringify(f));}
+function filaAdicionar(entrada){
+  const fila=filaLer();
+  entrada.fid=gid();entrada.data=new Date().toISOString();
+  if(entrada.tipo==='upsert'){
+    const i=fila.findIndex(x=>x.tipo==='upsert'&&x.aba===entrada.aba&&x.item&&x.item.id===entrada.item.id);
+    if(i>=0)fila[i]=entrada;else fila.push(entrada);
+  }else fila.push(entrada);
+  filaGravar(fila);
   atualizarStatusConexao();
-  if(!SCRIPT_URL||!navigator.onLine)return;
-  if(!temDadosPainel())return;
-  const payload={acao:'syncAll',dados:DB};
-  fetch(SCRIPT_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).catch(()=>{});
+  processarFila();
 }
+function processarFila(){
+  if(_enviandoFila)return;
+  const fila=filaLer();
+  if(!fila.length||!SCRIPT_URL||!navigator.onLine){atualizarStatusConexao();return;}
+  _enviandoFila=true;atualizarStatusConexao();
+  const primeiro=fila[0];
+  let payload,ids;
+  if(primeiro.tipo==='replace'){
+    payload={acao:'replaceAba',aba:primeiro.aba,itens:primeiro.itens};
+    ids=[primeiro.fid];
+  }else{
+    const doGrupo=fila.filter(x=>x.tipo==='upsert'&&x.aba===primeiro.aba);
+    payload={acao:'upsertMany',aba:primeiro.aba,itens:doGrupo.map(x=>x.item)};
+    ids=doGrupo.map(x=>x.fid);
+  }
+  fetch(SCRIPT_URL,{method:'POST',redirect:'follow',body:JSON.stringify(payload)})
+    .then(r=>r.json())
+    .then(resp=>{
+      _enviandoFila=false;
+      if(resp&&resp.ok){
+        filaGravar(filaLer().filter(x=>!ids.includes(x.fid)));
+        atualizarStatusConexao();
+        if(filaLer().length)processarFila();
+      }else{
+        console.log('⚠️ Servidor recusou: '+JSON.stringify(resp));
+        atualizarStatusConexao();
+      }
+    })
+    .catch(err=>{_enviandoFila=false;console.log('⚠️ Falha de envio: '+err);atualizarStatusConexao();});
+}
+function enviarParaSheets(){processarFila();}
+setInterval(processarFila,20000);
 
 function carregarDoSheets(cb){
   if(!SCRIPT_URL||!navigator.onLine){if(cb)cb();return;}
@@ -557,8 +617,17 @@ function carregarDoSheets(cb){
         if(data.vinculos&&data.vinculos.length)DB.vinculos=data.vinculos;
         if(data.tarefas&&data.tarefas.length)DB.tarefas=data.tarefas;
         if(data.usuariosPainel&&data.usuariosPainel.length)DB.usuariosPainel=data.usuariosPainel;
+        // PROTEÇÃO: reaplica alterações locais ainda não confirmadas por cima dos dados do servidor
+        const mapa={Demandas:'demandas',Visitas:'visitas',Usuarios:'usuarios',Condominios:'condominios',Vinculos:'vinculos',Tarefas:'tarefas',UsuariosPainel:'usuariosPainel'};
+        filaLer().forEach(p=>{
+          if(p.tipo!=='upsert')return;
+          const chave=mapa[p.aba];if(!chave||!DB[chave])return;
+          const i=DB[chave].findIndex(x=>x.id===p.item.id);
+          if(i>=0)DB[chave][i]=p.item;else DB[chave].push(p.item);
+        });
         localStorage.setItem('resilient_painel_db',JSON.stringify(DB));
       }
+      processarFila();
       if(cb)cb();
     })
     .catch(()=>{if(cb)cb();});
@@ -570,9 +639,7 @@ function sincronizarPainel(){
   if(btn){btn.textContent='⏳ Sincronizando...';btn.disabled=true;}
   carregarDoSheets(function(){
     atualizarTudo();
-    if(temDadosPainel())enviarParaSheets();
     if(btn){btn.textContent='☁️ Sincronizar';btn.disabled=false;}
-    // Mostrar status atualizado
     const el=document.getElementById('status-conexao');
     if(el)el.textContent='✅ Sincronizado '+new Date().toLocaleTimeString('pt-BR');
     setTimeout(function(){atualizarStatusConexao();},3000);
@@ -582,9 +649,13 @@ function sincronizarPainel(){
 function atualizarStatusConexao(){
   const el=document.getElementById('status-conexao');
   if(!el)return;
-  el.textContent=navigator.onLine?'✅ Online':'📡 Offline';
+  if(!navigator.onLine){el.textContent='📡 Offline';return;}
+  const fila=filaLer();
+  if(_enviandoFila)el.textContent='📤 Enviando...';
+  else if(fila.length>0)el.textContent='⏳ '+fila.length+' pendente(s)';
+  else el.textContent='✅ Online';
 }
-window.addEventListener('online',atualizarStatusConexao);
+window.addEventListener('online',function(){atualizarStatusConexao();processarFila();});
 window.addEventListener('offline',atualizarStatusConexao);
 
 // ===== LOGIN =====
@@ -774,8 +845,9 @@ function salvarCondo(){
   const nome=document.getElementById('mcd-nome').value.trim();if(!nome){alert('Informe o nome.');return;}
   const id=document.getElementById('mcd-id').value;
   const obj={id:id||gid(),nome,endereco:document.getElementById('mcd-endereco').value.trim(),sindico:document.getElementById('mcd-sindico').value.trim(),tel:document.getElementById('mcd-tel').value.trim(),obs:document.getElementById('mcd-obs').value.trim(),criadoPor:USUARIO_PAINEL.nome,criadoEm:new Date().toISOString()};
-  if(id){const i=DB.condominios.findIndex(x=>x.id===id);DB.condominios[i]={...DB.condominios[i],...obj};}else DB.condominios.push(obj);
-  salvarDB();fm('modal-condo');renderCondominios();
+  let condoSalvo;
+  if(id){const i=DB.condominios.findIndex(x=>x.id===id);DB.condominios[i]={...DB.condominios[i],...obj};condoSalvo=DB.condominios[i];}else{DB.condominios.push(obj);condoSalvo=obj;}
+  salvarDB('Condominios',condoSalvo);fm('modal-condo');renderCondominios();
 }
 function renderCondominios(){
   const el=document.getElementById('lista-condominios');
@@ -824,13 +896,14 @@ function abrirModalVincular(){
 function vincularPreposto(){
   const usuarioId=document.getElementById('mv-preposto').value;
   if(!usuarioId)return;
-  DB.vinculos.push({id:gid(),usuarioId,condoId:CONDO_ATUAL_ID});
-  salvarDB();fm('modal-vincular');renderPrepostosCondo();
+  const vinc={id:gid(),usuarioId,condoId:CONDO_ATUAL_ID};
+  DB.vinculos.push(vinc);
+  salvarDB('Vinculos',vinc);fm('modal-vincular');renderPrepostosCondo();
 }
 function desvincularPreposto(vincId){
   if(!confirm('Remover vínculo?'))return;
   DB.vinculos=DB.vinculos.filter(v=>v.id!==vincId);
-  salvarDB();renderPrepostosCondo();
+  salvarDBLista('Vinculos',DB.vinculos);renderPrepostosCondo();
 }
 
 // ===== DEMANDAS DO CONDOMINIO (DETALHE) =====
@@ -898,7 +971,7 @@ function selecionarCat(prefixo,c){
 function capturarFotoDemandaSindico(input){
   const file=input.files[0];if(!file)return;
   const reader=new FileReader();
-  reader.onload=e=>{_fotoMds=e.target.result;document.getElementById('mds-foto-preview').src=e.target.result;document.getElementById('mds-foto-preview').classList.remove('hidden');};
+  reader.onload=e=>{comprimirImagem(e.target.result,img=>{_fotoMds=img;document.getElementById('mds-foto-preview').src=img;document.getElementById('mds-foto-preview').classList.remove('hidden');});};
   reader.readAsDataURL(file);
 }
 function salvarDemandaSindico(){
@@ -913,7 +986,7 @@ function salvarDemandaSindico(){
     atribuidoPara:document.getElementById('mds-atribuir').value||'',
     fotoAntes:null,fotoDepois:null,execObs:'',concluidoEm:null,concluidoPor:''};
   DB.demandas.push(obj);
-  salvarDB();fm('modal-demanda-sindico');filtrarDemandasCondo('abertas');renderDashboard();
+  salvarDB('Demandas',obj);fm('modal-demanda-sindico');filtrarDemandasCondo('abertas');renderDashboard();
   alert('✅ Demanda criada!');
 }
 
@@ -944,7 +1017,7 @@ function abrirModalTarefa(id){
 function capturarFotoTarefa(input){
   const file=input.files[0];if(!file)return;
   const reader=new FileReader();
-  reader.onload=e=>{_fotoMt=e.target.result;document.getElementById('mt-foto-preview').src=e.target.result;document.getElementById('mt-foto-preview').classList.remove('hidden');};
+  reader.onload=e=>{comprimirImagem(e.target.result,img=>{_fotoMt=img;document.getElementById('mt-foto-preview').src=img;document.getElementById('mt-foto-preview').classList.remove('hidden');});};
   reader.readAsDataURL(file);
 }
 function salvarTarefa(){
@@ -961,8 +1034,9 @@ function salvarTarefa(){
     foto:_fotoMt,status:id?(DB.tarefas.find(t=>t.id===id)?.status||'pendente'):'pendente',
     criadoPor:USUARIO_PAINEL.nome,criadoPorId:USUARIO_PAINEL.id,criadoEm:id?(DB.tarefas.find(t=>t.id===id)?.criadoEm||new Date().toISOString()):new Date().toISOString(),
     fotoAntes:null,fotoDepois:null,execObs:'',concluidoEm:null,concluidoPor:''};
-  if(id){const i=DB.tarefas.findIndex(x=>x.id===id);DB.tarefas[i]={...DB.tarefas[i],...obj};}else DB.tarefas.push(obj);
-  salvarDB();fm('modal-tarefa');renderAgenda();renderDashboard();
+  let tarefaSalva;
+  if(id){const i=DB.tarefas.findIndex(x=>x.id===id);DB.tarefas[i]={...DB.tarefas[i],...obj};tarefaSalva=DB.tarefas[i];}else{DB.tarefas.push(obj);tarefaSalva=obj;}
+  salvarDB('Tarefas',tarefaSalva);fm('modal-tarefa');renderAgenda();renderDashboard();
   alert('✅ Tarefa salva!');
 }
 
@@ -1019,10 +1093,10 @@ function abrirExecutarPainel(id,tipo){
 function capturarFotoExecPainel(input,tp){
   const file=input.files[0];if(!file)return;
   const reader=new FileReader();
-  reader.onload=e=>{
-    if(tp==='antes'){_fotoExpAntes=e.target.result;document.getElementById('exp-foto-antes-preview').src=e.target.result;document.getElementById('exp-foto-antes-preview').classList.remove('hidden');document.getElementById('exp-antes-placeholder').classList.add('hidden');}
-    else{_fotoExpDepois=e.target.result;document.getElementById('exp-foto-depois-preview').src=e.target.result;document.getElementById('exp-foto-depois-preview').classList.remove('hidden');document.getElementById('exp-depois-placeholder').classList.add('hidden');}
-  };
+  reader.onload=e=>{comprimirImagem(e.target.result,img=>{
+    if(tp==='antes'){_fotoExpAntes=img;document.getElementById('exp-foto-antes-preview').src=img;document.getElementById('exp-foto-antes-preview').classList.remove('hidden');document.getElementById('exp-antes-placeholder').classList.add('hidden');}
+    else{_fotoExpDepois=img;document.getElementById('exp-foto-depois-preview').src=img;document.getElementById('exp-foto-depois-preview').classList.remove('hidden');document.getElementById('exp-depois-placeholder').classList.add('hidden');}
+  });};
   reader.readAsDataURL(file);
 }
 function concluirItemPainel(){
@@ -1037,7 +1111,9 @@ function concluirItemPainel(){
   item.execObs=document.getElementById('exp-obs').value.trim();
   item.concluidoEm=new Date().toISOString();
   item.concluidoPor=USUARIO_PAINEL.nome;
-  salvarDB();fm('modal-executar-painel');
+  salvarDB(tipo==='tarefa'?'Tarefas':'Demandas',item);
+  if(item.equipamentoId){const condoEq=DB.condominios.find(x=>x.id===item.condoId);if(condoEq)salvarDB('Condominios',condoEq);}
+  fm('modal-executar-painel');
   atualizarTudo();
   alert('✅ Concluído!');
 }
@@ -1094,7 +1170,9 @@ function salvarPreposto(){
   DB.vinculos=DB.vinculos.filter(v=>v.usuarioId!==obj.id);
   condosMarcados.forEach(condoId=>DB.vinculos.push({id:gid(),usuarioId:obj.id,condoId}));
 
-  salvarDB();fm('modal-preposto');renderPrepostos();
+  salvarDB('Usuarios',obj);
+  salvarDBLista('Vinculos',DB.vinculos);
+  fm('modal-preposto');renderPrepostos();
 }
 function renderPrepostos(){
   const tb=document.getElementById('tb-prepostos');
@@ -1106,7 +1184,7 @@ function renderPrepostos(){
     <td><button class="btn btn-ghost btn-sm" onclick="abrirModalPreposto('${u.id}')">✏️</button><button class="btn btn-danger btn-sm" onclick="excluirPreposto('${u.id}')">🗑️</button></td></tr>`;
   }).join('');
 }
-function excluirPreposto(id){if(!confirm('Excluir?'))return;DB.usuarios=DB.usuarios.filter(x=>x.id!==id);DB.vinculos=DB.vinculos.filter(v=>v.usuarioId!==id);salvarDB();renderPrepostos();}
+function excluirPreposto(id){if(!confirm('Excluir?'))return;DB.usuarios=DB.usuarios.filter(x=>x.id!==id);DB.vinculos=DB.vinculos.filter(v=>v.usuarioId!==id);salvarDBLista('Usuarios',DB.usuarios);salvarDBLista('Vinculos',DB.vinculos);renderPrepostos();}
 
 // ===== RELATORIOS =====
 // ===== PREVENTIVAS (EQUIPAMENTOS) =====
@@ -1201,17 +1279,17 @@ function salvarEquipamento(){
     ultima:document.getElementById('meq-ultima').value||'',
     atribuidoPara:document.getElementById('meq-resp').value||'',
     checklist:document.getElementById('meq-checklist').value.split('\n').map(s=>s.trim()).filter(Boolean)};
-  if(id&&condoOrig&&condoOrig!==condoId){const cO=DB.condominios.find(c=>c.id===condoOrig);if(cO)cO.equipamentos=(cO.equipamentos||[]).filter(e=>e.id!==id);}
+  if(id&&condoOrig&&condoOrig!==condoId){const cO=DB.condominios.find(c=>c.id===condoOrig);if(cO){cO.equipamentos=(cO.equipamentos||[]).filter(e=>e.id!==id);salvarDB('Condominios',cO);}}
   condo.equipamentos=condo.equipamentos||[];
   const i=condo.equipamentos.findIndex(e=>e.id===obj.id);
   if(i>=0)condo.equipamentos[i]={...condo.equipamentos[i],...obj};else condo.equipamentos.push(obj);
-  salvarDB();fm('modal-equipamento');renderPreventivas();
+  salvarDB('Condominios',condo);fm('modal-equipamento');renderPreventivas();
 }
 function excluirEquipamento(){
   if(!confirm('Excluir este equipamento do plano de preventivas?'))return;
   const id=document.getElementById('meq-id').value;const condoId=document.getElementById('meq-condo-orig').value||document.getElementById('meq-condo').value;
-  const c=DB.condominios.find(x=>x.id===condoId);if(c)c.equipamentos=(c.equipamentos||[]).filter(e=>e.id!==id);
-  salvarDB();fm('modal-equipamento');renderPreventivas();
+  const c=DB.condominios.find(x=>x.id===condoId);if(c){c.equipamentos=(c.equipamentos||[]).filter(e=>e.id!==id);salvarDB('Condominios',c);}
+  fm('modal-equipamento');renderPreventivas();
 }
 function gerarOSPreventiva(condoId,eqId){
   const c=DB.condominios.find(x=>x.id===condoId);const eq=(c?.equipamentos||[]).find(x=>x.id===eqId);if(!eq)return;
@@ -1223,7 +1301,7 @@ function gerarOSPreventiva(condoId,eqId){
     atribuidoPara:eq.atribuidoPara||'',
     fotoAntes:null,fotoDepois:null,execObs:'',concluidoEm:null,concluidoPor:''};
   DB.demandas.push(obj);
-  salvarDB();renderPreventivas();
+  salvarDB('Demandas',obj);renderPreventivas();
   alert('✅ OS de preventiva gerada!'+(obj.atribuidoPara?' Já atribuída ao responsável — vai aparecer no app Campo dele.':' Sem responsável definido — atribua pelo detalhe da demanda.'));
 }
 // Ao concluir uma demanda de preventiva, atualiza a data da última manutenção do equipamento
@@ -1314,14 +1392,14 @@ function salvarUsuarioPainel(){
   const id=document.getElementById('mup-id').value;
   const obj={id:id||gid(),nome,usuario,senha};
   if(id){const i=DB.usuariosPainel.findIndex(x=>x.id===id);DB.usuariosPainel[i]=obj;}else DB.usuariosPainel.push(obj);
-  salvarDB();fm('modal-usuario-painel');renderUsuariosPainel();
+  salvarDB('UsuariosPainel',obj);fm('modal-usuario-painel');renderUsuariosPainel();
 }
 function renderUsuariosPainel(){
   const tb=document.getElementById('tb-usuarios-painel');
   if(!DB.usuariosPainel.length){tb.innerHTML='<tr><td colspan="3" style="text-align:center;color:var(--text3);padding:16px;">Nenhum usuário cadastrado.</td></tr>';return;}
   tb.innerHTML=DB.usuariosPainel.map(u=>`<tr><td>${u.nome}</td><td>${u.usuario}</td><td><button class="btn btn-ghost btn-sm" onclick="abrirModalUsuarioPainel('${u.id}')">✏️</button><button class="btn btn-danger btn-sm" onclick="excluirUsuarioPainel('${u.id}')">🗑️</button></td></tr>`).join('');
 }
-function excluirUsuarioPainel(id){if(!confirm('Excluir?'))return;DB.usuariosPainel=DB.usuariosPainel.filter(x=>x.id!==id);salvarDB();renderUsuariosPainel();}
+function excluirUsuarioPainel(id){if(!confirm('Excluir?'))return;DB.usuariosPainel=DB.usuariosPainel.filter(x=>x.id!==id);salvarDBLista('UsuariosPainel',DB.usuariosPainel);renderUsuariosPainel();}
 
 // ===== CONFIG EMPRESA =====
 function carregarConfigEmpresa(){
